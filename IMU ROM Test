@@ -1,0 +1,159 @@
+#include <Wire.h>
+#include "SparkFun_BMI270_Arduino_Library.h"
+#define IMU_ADDR  0x68
+BMI270 imu;
+
+float currentAngle = 0;
+float maxSeen = 0,  minSeen = 999;
+bool imuOK = false;
+bool liveDisplay = true;
+int measureMode = 0;
+const char* modeNames[] = {"abduction", "flexion"};
+
+unsigned long lastDisplay = 0;
+const int DISPLAY_PERIOD = 200;  
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) delay(10);
+  delay(500);
+  Serial.println(F("# IMU Range of Motion Test"));
+  Serial.println(F("# (Direct I2C connection - no multiplexer)"));
+  Serial.println(F("#"));
+  Wire.begin();
+  delay(100);
+  Serial.println(F("# scanning I2C bus..."));
+  bool found = false;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print(F("# found device at 0x"));
+      if (addr < 16) Serial.print('0');
+      Serial.println(addr, HEX);
+      if (addr == IMU_ADDR) found = true;
+    }
+  }
+
+  if (!found) {
+    Serial.println(F("# ERROR: no IMU found at 0x68"));
+    Serial.println(F("# check Qwiic cable from Arduino to IMU"));
+    while (1) delay(100);
+  }
+
+  Serial.println();
+  Serial.print(F("# connecting to IMU at 0x68..."));
+  if (imu.beginI2C(IMU_ADDR) == BMI2_OK) {
+    imuOK = true;
+    Serial.println(F(" ok"));
+  } else {
+    Serial.println(F(" failed"));
+    while (1) delay(100);
+  }
+
+  delay(200);
+  readAngle();
+  maxSeen = minSeen = currentAngle;
+  Serial.println(F("#"));
+  Serial.print(F("# Mode: "));
+  Serial.println(modeNames[measureMode]);
+  Serial.println(F("#"));
+  Serial.println(F("# Move your arm through full range of motion"));
+  Serial.println(F("# Commands:"));
+  Serial.println(F("#   rom    show range of motion stats"));
+  Serial.println(F("#   reset  clear ROM tracking"));
+  Serial.println(F("#   live   toggle live readings on/off"));
+  Serial.println(F("#   mode   switch between abduction and flexion"));
+  Serial.println(F("#"));
+  delay(1000);
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  handleSerialCommands();
+  readAngle();
+  trackROM();
+  if (liveDisplay && (now - lastDisplay >= DISPLAY_PERIOD)) {
+    lastDisplay = now;
+    showLive();
+  }
+
+  delay(10);
+}
+
+
+void readAngle() {
+  if (!imuOK) return;
+
+  if (imu.getSensorData() == BMI2_OK) {
+    float ax = imu.data.accelX;
+    float ay = imu.data.accelY;
+    float az = imu.data.accelZ;
+
+    if (measureMode == 0) {
+      currentAngle = atan2(ay, sqrt(ax*ax + az*az)) * 180.0 / PI;
+    } else {
+      currentAngle = atan2(ax, sqrt(ay*ay + az*az)) * 180.0 / PI;
+    }
+    currentAngle = abs(currentAngle);
+  }
+}
+void trackROM() {
+  if (currentAngle > maxSeen) maxSeen = currentAngle;
+  if (currentAngle < minSeen) minSeen = currentAngle;
+}
+
+void showLive() {
+  Serial.print(modeNames[measureMode]);
+  Serial.print(F(": "));
+  Serial.print(currentAngle, 1);
+  Serial.print(F(" deg   ("));
+  Serial.print(minSeen, 1);
+  Serial.print(F(" - "));
+  Serial.print(maxSeen, 1);
+  Serial.print(F(")   range so far: "));
+  Serial.print(maxSeen - minSeen, 1);
+  Serial.println(F(" deg"));
+}
+
+void printRomReport() {
+  Serial.println();
+  Serial.println(F("# --- range of motion ---"));
+  Serial.print(F("# Mode: "));
+  Serial.println(modeNames[measureMode]);
+  Serial.print(F("# minimum angle: "));
+  Serial.print(minSeen, 1); Serial.println(F(" deg"));
+  Serial.print(F("# maximum angle: "));
+  Serial.print(maxSeen, 1); Serial.println(F(" deg"));
+  Serial.print(F("# total range:   "));
+  Serial.print(maxSeen - minSeen, 1); Serial.println(F(" deg"));
+  Serial.println();
+}
+
+void handleSerialCommands() {
+  if (!Serial.available()) return;
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  cmd.toLowerCase();
+
+  if (cmd == "rom") {
+    printRomReport();
+  }
+  else if (cmd == "reset") {
+    maxSeen = minSeen = currentAngle;
+    Serial.println(F("# ROM reset"));
+  }
+  else if (cmd == "live") {
+    liveDisplay = !liveDisplay;
+    Serial.print(F("# live display: "));
+    Serial.println(liveDisplay ? F("on") : F("off"));
+  }
+  else if (cmd == "mode") {
+    measureMode = 1 - measureMode;   
+    readAngle();
+    maxSeen = minSeen = currentAngle;
+    Serial.print(F("# switched to "));
+    Serial.print(modeNames[measureMode]);
+    Serial.println(F(" mode (ROM reset)"));
+  }
+}
