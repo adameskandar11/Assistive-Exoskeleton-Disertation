@@ -80,7 +80,7 @@ void loop() {
     Serial.println(emgFlx);
   }
 
-  delay(20);  // ~50Hz sampling
+  delay(20);  
 }
 
 void calibrate() {
